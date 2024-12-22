@@ -13,8 +13,7 @@ This Rust program processes a large CSV file of disaster records, grouping them 
 ### macOS/Linux
 1. Open Terminal
 2. Run the following command:```bash
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-```
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh```
 3. Follow the on-screen instructions
 4. Either restart your terminal or run:
 ```bash
@@ -37,7 +36,7 @@ cd fema-csv
 
 3. Build and run the project:
 ```bash
-cargo run
+cargo run --release
 ```
 
 The program will:
