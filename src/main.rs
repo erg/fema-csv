@@ -155,9 +155,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut disaster_groups: HashMap<String, Vec<csv::StringRecord>> = HashMap::new();
 
     // Create a progress bar for the initial read
-    println!("Counting total records...");
-    let total_records = reader.records().count();
-    println!("Total records to process: {}", total_records);
+    // println!("Counting total records...");
+    let total_records = 25208363; // reader.records().count(); // estimate, 12/21/2024
+    // let total_records = reader.records().count(); // takes too long
+    println!("Total records to process (estimate): {}", total_records);
 
     // Reset the reader
     let mut reader = download_csv(ihp_url, ihp_cache).await?;
