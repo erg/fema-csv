@@ -52,9 +52,9 @@ async fn download_csv(url: &str, cache_path: &str) -> Result<csv::Reader<File>, 
 
     if should_download {
         println!("Downloading {} to {}...", url, cache_path);
-        
+
         let client = reqwest::Client::new();
-        
+
         // Create custom headers
         let mut headers = HeaderMap::new();
         headers.insert(USER_AGENT, HeaderValue::from_static("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"));
@@ -106,8 +106,33 @@ async fn download_csv(url: &str, cache_path: &str) -> Result<csv::Reader<File>, 
     Ok(reader)
 }
 
+async fn load_storm_names() -> Result<HashMap<String, (String, String)>, Box<dyn Error>> {
+    let mut storm_map = HashMap::new();
+    let mut rdr = csv::ReaderBuilder::new()
+        .delimiter(b'\t')
+        .from_path("StormsByNumber.tsv")?;
+
+    // Skip the header
+    rdr.headers()?;
+
+    for result in rdr.records() {
+        let record = result?;
+        if let (Some(storm_name), Some(state), Some(disaster_num)) =
+            (record.get(0), record.get(1), record.get(2)) {
+            storm_map.insert(
+                disaster_num.to_string(),
+                (storm_name.to_string(), state.to_string())
+            );
+        }
+    }
+    Ok(storm_map)
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+    println!("Loading storm names from TSV...");
+    let storm_names = load_storm_names().await?;
+
     let ihp_url = "https://www.fema.gov/about/reports-and-data/openfema/IndividualsAndHouseholdsProgramValidRegistrations.csv";
     let declarations_url = "https://www.fema.gov/api/open/v1/FemaWebDisasterDeclarations.csv";
 
@@ -115,82 +140,106 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let declarations_cache = "FemaWebDisasterDeclarations.csv";
     println!("About to download files...");
     let mut reader = download_csv(ihp_url, ihp_cache).await?;
-    let _declarations_reader = download_csv(declarations_url, declarations_cache).await?;
+    let mut declarations_reader = download_csv(declarations_url, declarations_cache).await?;
 
     println!("Starting to process IHP data...");
-    
+
     // Create csvs directory if it doesn't exist
     std::fs::create_dir_all("./csvs")?;
     println!("Created output directory: ./csvs");
-    
+
     // Get headers
     let headers = reader.headers()?.clone();
     println!("Headers loaded successfully");
-    
+
     let mut disaster_groups: HashMap<String, Vec<csv::StringRecord>> = HashMap::new();
-    
+
     // Create a progress bar for the initial read
     println!("Counting total records...");
     let total_records = reader.records().count();
     println!("Total records to process: {}", total_records);
-    
+
     // Reset the reader
     let mut reader = download_csv(ihp_url, ihp_cache).await?;
     let _headers = reader.headers()?; // Skip headers again
-    
+
     let pb = ProgressBar::new(total_records as u64);
     pb.set_style(ProgressStyle::default_bar()
         .template("{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {pos}/{len} records ({eta})")
         .unwrap()
         .progress_chars("#>-"));
-    
+
     println!("Reading and grouping records...");
     let mut record_count = 0;
     for result in reader.records() {
         let record = result?;
         let disaster_num = record.get(2).unwrap_or("unknown").to_string();
-        
+
         disaster_groups.entry(disaster_num)
             .or_insert_with(Vec::new)
             .push(record);
-            
+
         record_count += 1;
         pb.set_position(record_count);
     }
-    
+
     pb.finish_with_message("Finished reading records");
-    
+
     println!("\nTotal records processed: {}", record_count);
     println!("Found {} unique disaster numbers", disaster_groups.len());
-    
+
+    // Load declaration dates into a HashMap
+    let mut declaration_years = HashMap::new();
+    let _headers = declarations_reader.headers()?;
+    for result in declarations_reader.records() {
+        let record = result?;
+        if let (Some(disaster_num), Some(declaration_date)) = (record.get(0), record.get(1)) {
+            if let Some(year) = declaration_date.get(..4) {
+                declaration_years.insert(disaster_num.to_string(), year.to_string());
+            }
+        }
+    }
+
     // Add progress bar for writing files
     let pb = ProgressBar::new(disaster_groups.len() as u64);
     pb.set_style(ProgressStyle::default_bar()
         .template("{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {pos}/{len} disasters written ({eta})")
         .unwrap()
         .progress_chars("#>-"));
-    
     let mut disasters_written = 0;
     for (disaster_num, records) in disaster_groups {
-        println!("Writing disaster number {} with {} records", disaster_num, records.len());
-        
-        let output_path = format!("./csvs/{}.csv", disaster_num);
+        // Get storm info from our map
+        let (storm_name, state) = storm_names
+            .get(&disaster_num)
+            .map(|(s, st)| (s.as_str(), st.as_str()))
+            .unwrap_or(("unknown", "unknown"));
+
+        // Get year from declarations
+        let year = declaration_years
+            .get(&disaster_num)
+            .map(|y| y.as_str())
+            .unwrap_or("unknown");
+
+        println!("Writing disaster {} ({} in {}) with {} records",
+                disaster_num, storm_name, state, records.len());
+        let state_formatted = state.replace(" ", "-");
+        let output_path = format!("./csvs/{}--{}--{}--{}.csv", year, state_formatted, storm_name, disaster_num);
         let output_file = File::create(output_path)?;
         let mut writer = Writer::from_writer(output_file);
-        
+
         writer.write_record(&headers)?;
-        
+
         for record in records {
             writer.write_record(&record)?;
         }
-        
+
         writer.flush()?;
-        
+
         disasters_written += 1;
         pb.set_position(disasters_written);
     }
-    
+
     pb.finish_with_message("Finished writing all disaster files");
     println!("Process complete!");
     Ok(())
-} 
+}
